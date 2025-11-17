@@ -1,0 +1,77 @@
+services:
+  nginx:
+    image: nginx:latest
+    restart: on-failure
+    working_dir: /etc/nginx
+    ports:
+      - "${DOCKER_APP_PORT:-8000}:80"
+    volumes:
+      - ./:/var/www/app
+      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./deployment/nginx/sites:/etc/nginx/conf.d
+      - ./deployment/logs/nginx:/var/log/nginx
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      - php
+
+  php:
+    build:
+      context: ./deployment/php
+      dockerfile: Dockerfile
+      args:
+        ENABLE_XDEBUG: ${DOCKER_ENABLE_XDEBUG}
+    image: mini-crm-backend
+    restart: on-failure
+    working_dir: /var/www/app
+    volumes:
+      - .:/var/www/app
+      - ./deployment/logs/php-fpm:/var/log/php-fpm
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  supervisor:
+    build:
+      context: ./deployment/supervisor
+      dockerfile: Dockerfile
+      additional_contexts:
+        mini-crm-backend: service:php
+      args:
+        ENABLE_SUPERVISOR: ${DOCKER_ENABLE_SUPERVISOR}
+    restart: on-failure
+    working_dir: /etc/supervisor
+    volumes:
+      - .:/var/www/app
+      - ./deployment/logs/supervisor:/var/log/supervisor
+      - ./deployment/supervisor/supervisord.d:/etc/supervisor/conf.d
+    ports:
+      - "127.0.0.1:${DOCKER_SUPERVISOR_PORT:-9005}:9001"
+    depends_on:
+      - php
+
+  mysql:
+    image: mysql:8.0
+    restart: on-failure
+    tty: true
+    ports:
+      - "127.0.0.1:${DOCKER_DB_PORT:-3307}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "${DB_PASSWORD}"
+      MYSQL_DATABASE: "${DB_DATABASE}"
+    volumes:
+      - "./deployment/volumes/mysql:/var/lib/mysql"
+      - "./deployment/mysql/conf.d:/etc/mysql/conf.d/"
+    healthcheck:
+      test: ["CMD", "mysql", "-u", "${DB_USERNAME}", "-p${DB_PASSWORD}"]
+      timeout: 2s
+      interval: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.4.2
+    restart: on-failure
+    volumes:
+      - "./deployment/volumes/redis:/data"
+    ports:
+      - "127.0.0.1:${DOCKER_REDIS_PORT:-6380}:6379"
